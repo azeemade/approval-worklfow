@@ -8,6 +8,8 @@ use Azeem\ApprovalWorkflow\Events\RequestRejected;
 use Azeem\ApprovalWorkflow\Notifications\ApprovalRequestedNotification;
 use Azeem\ApprovalWorkflow\Notifications\RequestApprovedNotification;
 use Azeem\ApprovalWorkflow\Notifications\RequestRejectedNotification;
+use Azeem\ApprovalWorkflow\Events\ChangesRequested;
+use Azeem\ApprovalWorkflow\Notifications\ChangesRequestedNotification;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Support\Facades\Notification;
 
@@ -31,6 +33,8 @@ class SendApprovalNotifications implements ShouldQueue
             $this->handleRequestApproved($event);
         } elseif ($event instanceof RequestRejected) {
             $this->handleRequestRejected($event);
+        } elseif ($event instanceof ChangesRequested) {
+            $this->handleChangesRequested($event);
         }
     }
 
@@ -68,6 +72,15 @@ class SendApprovalNotifications implements ShouldQueue
 
         if ($request->creator) {
             $this->sendNotification($request->creator, new RequestRejectedNotification($request));
+        }
+    }
+
+    protected function handleChangesRequested(ChangesRequested $event)
+    {
+        $request = $event->request;
+
+        if ($request->creator) {
+            $this->sendNotification($request->creator, new ChangesRequestedNotification($request));
         }
     }
 

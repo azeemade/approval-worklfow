@@ -13,6 +13,9 @@ class ApprovalRequest extends Model
 
     protected $casts = [
         'metadata' => 'array',
+        'requested_changes' => 'array',
+        'removed_approvers' => 'array',
+        'status' => \Azeem\ApprovalWorkflow\Enums\ApprovalStatus::class,
         'approved_at' => 'datetime',
         'rejected_at' => 'datetime',
     ];

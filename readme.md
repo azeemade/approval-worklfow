@@ -157,7 +157,27 @@ $service->reroute($request, $newApproverId, $adminUser);
 
 This updates `current_approver_id`, logs the action, and sends a new notification to the replacement approver.
 
-### 6. Conditional Workflows
+### 6. Request Changes (Return to Creator)
+
+Instead of outright rejecting a request, an approver can ask the creator to modify their submission.
+
+```php
+$service->requestChanges($request, $approverUser, 'Please attach the missing receipt', ['receipt_file']);
+```
+
+This sets `status = returned` and fires a `ChangesRequestedNotification` to the creator. The optional 4th parameter `['receipt_file']` allows you to store the specific fields that need to be changed in a `requested_changes` JSON column, which your frontend can use to highlight errors.
+
+### 7. Remove an Approver
+
+You can dynamically remove a specific approver from a request without removing them entirely from the workflow template.
+
+```php
+$service->removeApprover($request, $approverIdToRemove, $adminUser);
+```
+
+If the removed approver is currently the active approver holding up the request, the package will automatically auto-advance the request to the next level. If it was the final level, it will auto-approve.
+
+### 8. Conditional Workflows
 
 You can configure an approval flow to run only if certain conditions are met (e.g., amount > $5000, or specifically tailored business rules). If the condition fails, the request is instantly created as `status = skipped` and processing continues immediately.
 

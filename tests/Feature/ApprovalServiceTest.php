@@ -54,7 +54,7 @@ class ApprovalServiceTest extends TestCase
         $this->assertDatabaseHas('approval_requests', [
             'model_type' => TestModel::class,
             'model_id' => $model->id,
-            'status' => 'pending',
+            'status' => \Azeem\ApprovalWorkflow\Enums\ApprovalStatus::PENDING,
             'current_level' => 1,
         ]);
     }
@@ -81,13 +81,13 @@ class ApprovalServiceTest extends TestCase
         $service->approve($request, $user);
 
         $this->assertEquals(2, $request->fresh()->current_level);
-        $this->assertEquals('pending', $request->fresh()->status);
+        $this->assertEquals(\Azeem\ApprovalWorkflow\Enums\ApprovalStatus::PENDING, $request->fresh()->status);
 
         // Approve Level 2 (Final)
         $service->approve($request->fresh(), $user);
 
         $this->assertEquals(2, $request->fresh()->current_level); // stays at max or we could check status
-        $this->assertEquals('approved', $request->fresh()->status);
+        $this->assertEquals(\Azeem\ApprovalWorkflow\Enums\ApprovalStatus::APPROVED, $request->fresh()->status);
     }
 
     /** @test */
@@ -105,7 +105,7 @@ class ApprovalServiceTest extends TestCase
         $service = new ApprovalService();
         $request = $service->submit($model, ['action_type' => 'conditional_true', 'creator_id' => 1]);
 
-        $this->assertEquals('pending', $request->status);
+        $this->assertEquals(\Azeem\ApprovalWorkflow\Enums\ApprovalStatus::PENDING, $request->status);
         $this->assertEquals(99, $request->current_approver_id);
     }
 
@@ -126,13 +126,76 @@ class ApprovalServiceTest extends TestCase
         $service = new ApprovalService();
         $request = $service->submit($model, ['action_type' => 'conditional_false', 'creator_id' => 1]);
 
-        $this->assertEquals('skipped', $request->status);
+        $this->assertEquals(\Azeem\ApprovalWorkflow\Enums\ApprovalStatus::SKIPPED, $request->status);
         $this->assertNull($request->current_approver_id);
 
         \Illuminate\Support\Facades\Event::assertDispatched(\Azeem\ApprovalWorkflow\Events\ApprovalSkipped::class);
         $this->assertDatabaseHas('approval_request_logs', [
             'approval_request_id' => $request->id,
             'action' => 'skipped',
+        ]);
+    }
+
+    /** @test */
+    public function it_can_request_changes()
+    {
+        $flow = ApprovalFlow::create([
+            'name' => 'Expense Approval',
+            'action_type' => 'expense',
+            'is_active' => true
+        ]);
+        $flow->steps()->create(['level' => 1]);
+
+        $approver = ServiceTestUser::forceCreate(['name' => 'Approver', 'email' => 'approver2@example.com', 'password' => 'secret']);
+        $model = TestModel::create(['name' => 'Trip to London']);
+
+        $service = new ApprovalService();
+        $request = $service->submit($model, ['action_type' => 'expense', 'creator_id' => 1]);
+
+        $service->requestChanges($request, $approver, 'Please attach receipt', ['receipt']);
+
+        $this->assertEquals(\Azeem\ApprovalWorkflow\Enums\ApprovalStatus::RETURNED, $request->fresh()->status);
+        $this->assertEquals(['receipt'], $request->fresh()->requested_changes);
+
+        $this->assertDatabaseHas('approval_request_logs', [
+            'approval_request_id' => $request->id,
+            'action' => 'returned',
+            'comment' => 'Please attach receipt'
+        ]);
+    }
+
+    /** @test */
+    public function it_can_remove_approver_and_auto_advances()
+    {
+        $flow = ApprovalFlow::create([
+            'name' => 'Multi-step Flow',
+            'action_type' => 'multi_step',
+            'is_active' => true
+        ]);
+
+        $flow->steps()->create(['level' => 1, 'approver_id' => 10]);
+        $flow->steps()->create(['level' => 2, 'approver_id' => 20]);
+
+        $admin = ServiceTestUser::forceCreate(['name' => 'Admin', 'email' => 'admin@example.com', 'password' => 'secret']);
+        $model = TestModel::create(['name' => 'Need Approval']);
+
+        $service = new ApprovalService();
+        $request = $service->submit($model, ['action_type' => 'multi_step']);
+
+        $this->assertEquals(10, $request->current_approver_id);
+
+        // Remove the current approver (10)
+        $service->removeApprover($request, 10, $admin);
+
+        // It should auto-advance to level 2 (approver 20)
+        $request->refresh();
+        $this->assertEquals(2, $request->current_level);
+        $this->assertEquals(20, $request->current_approver_id);
+        $this->assertContains(10, $request->removed_approvers);
+
+        $this->assertDatabaseHas('approval_request_logs', [
+            'approval_request_id' => $request->id,
+            'action' => 'approver_removed'
         ]);
     }
 }

@@ -31,6 +31,11 @@ class ApprovalWorkflowServiceProvider extends ServiceProvider
             \Azeem\ApprovalWorkflow\Events\RequestRejected::class,
             \Azeem\ApprovalWorkflow\Listeners\SendApprovalNotifications::class
         );
+
+        \Illuminate\Support\Facades\Event::listen(
+            \Azeem\ApprovalWorkflow\Events\ChangesRequested::class,
+            \Azeem\ApprovalWorkflow\Listeners\SendApprovalNotifications::class
+        );
     }
 
     /**

@@ -5,6 +5,7 @@ namespace Azeem\ApprovalWorkflow\Services;
 use Azeem\ApprovalWorkflow\Models\ApprovalFlow;
 use Azeem\ApprovalWorkflow\Models\ApprovalRequest;
 use Azeem\ApprovalWorkflow\Models\ApprovalRequestLog;
+use Azeem\ApprovalWorkflow\Enums\ApprovalStatus;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\DB;
 use Exception;
@@ -57,7 +58,7 @@ class ApprovalService
                         'model_type' => get_class($model),
                         'model_id' => $model->getKey(),
                         'current_level' => 1,
-                        'status' => 'skipped',
+                        'status' => ApprovalStatus::SKIPPED,
                         'creator_id' => $attributes['creator_id'] ?? auth()->id(),
                         'metadata' => $attributes['metadata'] ?? null,
                         'current_approver_id' => null,
@@ -82,7 +83,7 @@ class ApprovalService
                 'model_type' => get_class($model),
                 'model_id' => $model->getKey(),
                 'current_level' => 1,
-                'status' => 'pending',
+                'status' => ApprovalStatus::PENDING,
                 'creator_id' => $attributes['creator_id'] ?? auth()->id(),
                 'metadata' => $attributes['metadata'] ?? null,
                 'current_approver_id' => $approverId,
@@ -112,21 +113,45 @@ class ApprovalService
             // Log the approval
             $this->logAction($request, $approver->id, 'approved', $comment);
 
+            $removedApprovers = $request->removed_approvers ?? [];
+
             if ($currentLevel < $totalLevels) {
-                // Move to next level
-                $nextLevel = $currentLevel + 1;
-                $request->increment('current_level');
+                // Move to next level, skipping any removed approvers
+                $nextLevel = $currentLevel;
+                $nextApproverId = null;
+                $foundNext = false;
 
-                // Update current approver logic
-                $nextStep = $flow->steps()->where('level', $nextLevel)->first();
-                $nextApproverId = $nextStep ? $nextStep->approver_id : null;
-                $request->update(['current_approver_id' => $nextApproverId]);
+                while ($nextLevel < $totalLevels) {
+                    $nextLevel++;
+                    $nextStep = $flow->steps()->where('level', $nextLevel)->first();
+                    $potentialApproverId = $nextStep ? $nextStep->approver_id : null;
 
-                \Azeem\ApprovalWorkflow\Events\ApprovalRequested::dispatch($request->refresh());
+                    if (!in_array($potentialApproverId, $removedApprovers)) {
+                        $nextApproverId = $potentialApproverId;
+                        $foundNext = true;
+                        break;
+                    }
+                }
+
+                if ($foundNext) {
+                    $request->update([
+                        'current_level' => $nextLevel,
+                        'current_approver_id' => $nextApproverId
+                    ]);
+                    \Azeem\ApprovalWorkflow\Events\ApprovalRequested::dispatch($request->refresh());
+                } else {
+                    // All remaining approvers were removed, auto-approve
+                    $request->update([
+                        'status' => ApprovalStatus::APPROVED,
+                        'approved_at' => now(),
+                        'current_approver_id' => null,
+                    ]);
+                    \Azeem\ApprovalWorkflow\Events\RequestApproved::dispatch($request);
+                }
             } else {
                 // Final approval
                 $request->update([
-                    'status' => 'approved',
+                    'status' => ApprovalStatus::APPROVED,
                     'approved_at' => now(),
                     'current_approver_id' => null,
                 ]);
@@ -144,7 +169,7 @@ class ApprovalService
     {
         return DB::transaction(function () use ($request, $approver, $comment) {
             $request->update([
-                'status' => 'rejected',
+                'status' => ApprovalStatus::REJECTED,
                 'rejected_at' => now(),
                 'current_approver_id' => null,
             ]);
@@ -195,5 +220,56 @@ class ApprovalService
             'action' => $action,
             'comment' => $comment
         ]);
+    }
+
+    /**
+     * Request changes from the creator.
+     */
+    public function requestChanges(ApprovalRequest $request, $approver, ?string $comment = null, array $fields = []): bool
+    {
+        return DB::transaction(function () use ($request, $approver, $comment, $fields) {
+            $request->update([
+                'status' => ApprovalStatus::RETURNED,
+                'requested_changes' => $fields,
+            ]);
+
+            $this->logAction($request, $approver->id, 'returned', $comment);
+
+            \Azeem\ApprovalWorkflow\Events\ChangesRequested::dispatch($request);
+
+            return true;
+        });
+    }
+
+    /**
+     * Remove a specific approver from a specific request.
+     */
+    public function removeApprover(ApprovalRequest $request, $approverIdToRemove, $adminUser): bool
+    {
+        return DB::transaction(function () use ($request, $approverIdToRemove, $adminUser) {
+            $removedApprovers = $request->removed_approvers ?? [];
+
+            if (!in_array($approverIdToRemove, $removedApprovers)) {
+                $removedApprovers[] = $approverIdToRemove;
+
+                $request->update([
+                    'removed_approvers' => $removedApprovers
+                ]);
+            }
+
+            $this->logAction($request, $adminUser->id, 'approver_removed', "Removed approver {$approverIdToRemove} from the request");
+
+            \Azeem\ApprovalWorkflow\Events\ApproverRemoved::dispatch($request, $approverIdToRemove);
+
+            // If the person we removed is the CURRENT approver, we need to advance the request
+            if ($request->current_approver_id == $approverIdToRemove) {
+                // Act as if it was approved to move to the next valid person (or finish)
+                // Passing the admin logic to an internal advance method is better, 
+                // but for now we can just call approve() programmatically with the admin as the actor
+                $this->approve($request, $adminUser, "System Auto-Advance: Current Approver Removed");
+            }
+
+            return true;
+        });
     }
 }
