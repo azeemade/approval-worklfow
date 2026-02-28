@@ -200,6 +200,39 @@ class ApprovalServiceTest extends TestCase
     }
 
     /** @test */
+    public function it_prevents_unauthorized_approver_from_approving()
+    {
+        $flow = ApprovalFlow::create([
+            'name' => 'Two Step Flow',
+            'action_type' => 'two_step',
+            'is_active' => true
+        ]);
+
+        $user1 = ServiceTestUser::forceCreate(['id' => 101, 'name' => 'User 1', 'email' => 'u1@example.com', 'password' => 'secret']);
+        $user2 = ServiceTestUser::forceCreate(['id' => 102, 'name' => 'User 2', 'email' => 'u2@example.com', 'password' => 'secret']);
+
+        $flow->steps()->create(['level' => 1, 'approver_id' => $user1->id]);
+        $flow->steps()->create(['level' => 2, 'approver_id' => $user2->id]);
+
+        $model = TestModel::create(['name' => 'Auth Test Model']);
+        $service = new ApprovalService();
+        $request = $service->submit($model, ['action_type' => 'two_step', 'creator_id' => $user1->id]);
+
+        // User 1 correctly approves level 1
+        $service->approve($request, $user1);
+        $request->refresh();
+
+        $this->assertEquals(2, $request->current_level);
+        $this->assertEquals([102], $request->pending_approvers);
+
+        // User 1 tries to approve level 2 — they are NOT authorized
+        $this->expectException(\Exception::class);
+        $this->expectExceptionMessage('not authorized to approve');
+
+        $service->approve($request, $user1); // Should throw!
+    }
+
+    /** @test */
     public function it_advances_immediately_if_strategy_is_any()
     {
         $flow = ApprovalFlow::create([

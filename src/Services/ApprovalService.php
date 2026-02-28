@@ -134,20 +134,23 @@ class ApprovalService
     public function approve(ApprovalRequest $request, $approver, ?string $comment = null, ?callable $callback = null): bool
     {
         return DB::transaction(function () use ($request, $approver, $comment, $callback) {
-            // Verify if user is allowed to approve (TODO: Role/User check against step)
-
             $currentLevel = $request->current_level;
             $flow = $request->flow;
             $totalLevels = $flow->steps()->count();
             $currentStep = $flow->steps()->where('level', $currentLevel)->first();
 
+            // Authorization: verify this user is actually a pending approver for this level
+            $pendingApprovers = $request->pending_approvers ?? [];
+
+            if (!empty($pendingApprovers) && !in_array($approver->id, $pendingApprovers)) {
+                throw new Exception("User {$approver->id} is not authorized to approve this request at level {$currentLevel}.");
+            }
+
             // Log the approval
             $this->logAction($request, $approver->id, 'approved', $comment);
 
             // Update pending vs approved arrays
-            $pendingApprovers = $request->pending_approvers ?? [];
             $approvedBy = $request->approved_by ?? [];
-
             // Remove approver from pending and add to approved_by
             $pendingApprovers = array_values(array_diff($pendingApprovers, [$approver->id]));
             if (!in_array($approver->id, $approvedBy)) {
