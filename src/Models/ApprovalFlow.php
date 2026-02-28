@@ -11,6 +11,11 @@ class ApprovalFlow extends Model
 
     protected $guarded = [];
 
+    protected $casts = [
+        'metadata' => 'array',
+        'is_active' => 'boolean',
+    ];
+
     public function __construct(array $attributes = [])
     {
         parent::__construct($attributes);
