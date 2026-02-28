@@ -275,6 +275,70 @@ class ApprovalServiceTest extends TestCase
         $this->assertEquals(2, $request->current_level);
         $this->assertEquals(20, $request->current_approver_id);
     }
+
+    /** @test */
+    public function it_auto_approves_when_no_flow_exists()
+    {
+        $user = ServiceTestUser::forceCreate(['name' => 'User', 'email' => 'noflow@example.com', 'password' => 'secret']);
+        $this->actingAs($user);
+
+        $model = TestModel::create(['name' => 'No Flow Model']);
+        $service = new ApprovalService();
+
+        // Submit with an action_type that has no flow configured at all
+        $request = $service->submit($model, ['action_type' => 'unknown_action', 'creator_id' => $user->id]);
+
+        $this->assertEquals(\Azeem\ApprovalWorkflow\Enums\ApprovalStatus::APPROVED, $request->status);
+        $this->assertNotNull($request->approved_at);
+        $this->assertDatabaseHas('approval_request_logs', [
+            'approval_request_id' => $request->id,
+            'action' => 'approved',
+        ]);
+    }
+
+    /** @test */
+    public function it_auto_approves_when_flow_has_no_steps()
+    {
+        $flow = ApprovalFlow::create([
+            'name' => 'Empty Flow',
+            'action_type' => 'empty_flow',
+            'is_active' => true
+        ]);
+        // No steps created
+
+        $user = ServiceTestUser::forceCreate(['name' => 'User', 'email' => 'nosteps@example.com', 'password' => 'secret']);
+        $model = TestModel::create(['name' => 'Empty Flow Model']);
+        $service = new ApprovalService();
+
+        $request = $service->submit($model, ['action_type' => 'empty_flow', 'creator_id' => $user->id]);
+
+        $this->assertEquals(\Azeem\ApprovalWorkflow\Enums\ApprovalStatus::APPROVED, $request->status);
+        $this->assertNotNull($request->approved_at);
+    }
+
+    /** @test */
+    public function it_executes_callback_on_approve()
+    {
+        $flow = ApprovalFlow::create([
+            'name' => 'Callback Flow',
+            'action_type' => 'callback_flow',
+            'is_active' => true
+        ]);
+        $flow->steps()->create(['level' => 1]);
+
+        $approver = ServiceTestUser::forceCreate(['name' => 'Approver', 'email' => 'cb@example.com', 'password' => 'secret']);
+        $model = TestModel::create(['name' => 'Callback Model']);
+        $service = new ApprovalService();
+
+        $request = $service->submit($model, ['action_type' => 'callback_flow', 'creator_id' => $approver->id]);
+
+        $callbackFired = false;
+        $service->approve($request, $approver, null, function ($req) use (&$callbackFired) {
+            $callbackFired = true;
+        });
+
+        $this->assertTrue($callbackFired, 'Callback should be executed after approval.');
+    }
 }
 
 class TestModel extends Model

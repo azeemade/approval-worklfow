@@ -39,8 +39,30 @@ class ApprovalService
             })
             ->first();
 
-        if (!$flow) {
-            throw new Exception("No active approval flow found for action: {$actionType}");
+        if (!$flow || $flow->steps()->count() === 0) {
+            // Auto-approve if no active flow is found or flow has zero steps
+            return DB::transaction(function () use ($model, $flow, $attributes, $actionType) {
+                $request = ApprovalRequest::create([
+                    'approval_flow_id' => $flow ? $flow->id : null,
+                    'model_type' => get_class($model),
+                    'model_id' => $model->getKey(),
+                    'current_level' => 1,
+                    'status' => ApprovalStatus::APPROVED, // instantly approved
+                    'creator_id' => $attributes['creator_id'] ?? auth()->id(),
+                    'metadata' => $attributes['metadata'] ?? null,
+                    'current_approver_id' => null,
+                    'pending_approvers' => [],
+                    'approved_by' => [],
+                    'approved_at' => now(),
+                ]);
+
+                $reason = !$flow ? "No active workflow found for action: {$actionType}" : "Workflow has no steps configured";
+                $this->logAction($request, $request->creator_id, 'approved', "Auto-approved: {$reason}");
+
+                \Azeem\ApprovalWorkflow\Events\RequestApproved::dispatch($request);
+
+                return $request;
+            });
         }
 
         // Evaluate conditional trigger if defined
@@ -109,9 +131,9 @@ class ApprovalService
     /**
      * Approve the request at the current level.
      */
-    public function approve(ApprovalRequest $request, $approver, ?string $comment = null): bool
+    public function approve(ApprovalRequest $request, $approver, ?string $comment = null, ?callable $callback = null): bool
     {
-        return DB::transaction(function () use ($request, $approver, $comment) {
+        return DB::transaction(function () use ($request, $approver, $comment, $callback) {
             // Verify if user is allowed to approve (TODO: Role/User check against step)
 
             $currentLevel = $request->current_level;
@@ -215,6 +237,10 @@ class ApprovalService
                 \Azeem\ApprovalWorkflow\Events\RequestApproved::dispatch($request);
             }
 
+            if ($callback) {
+                $callback($request);
+            }
+
             return true;
         });
     }
@@ -222,9 +248,9 @@ class ApprovalService
     /**
      * Reject the request.
      */
-    public function reject(ApprovalRequest $request, $approver, ?string $comment = null): bool
+    public function reject(ApprovalRequest $request, $approver, ?string $comment = null, ?callable $callback = null): bool
     {
-        return DB::transaction(function () use ($request, $approver, $comment) {
+        return DB::transaction(function () use ($request, $approver, $comment, $callback) {
             $request->update([
                 'status' => ApprovalStatus::REJECTED,
                 'rejected_at' => now(),
@@ -234,6 +260,10 @@ class ApprovalService
             $this->logAction($request, $approver->id, 'rejected', $comment);
 
             \Azeem\ApprovalWorkflow\Events\RequestRejected::dispatch($request);
+
+            if ($callback) {
+                $callback($request);
+            }
 
             return true;
         });
@@ -297,9 +327,9 @@ class ApprovalService
     /**
      * Request changes from the creator.
      */
-    public function requestChanges(ApprovalRequest $request, $approver, ?string $comment = null, array $fields = []): bool
+    public function requestChanges(ApprovalRequest $request, $approver, ?string $comment = null, array $fields = [], ?callable $callback = null): bool
     {
-        return DB::transaction(function () use ($request, $approver, $comment, $fields) {
+        return DB::transaction(function () use ($request, $approver, $comment, $fields, $callback) {
             $request->update([
                 'status' => ApprovalStatus::RETURNED,
                 'requested_changes' => $fields,
@@ -308,6 +338,10 @@ class ApprovalService
             $this->logAction($request, $approver->id, 'returned', $comment);
 
             \Azeem\ApprovalWorkflow\Events\ChangesRequested::dispatch($request);
+
+            if ($callback) {
+                $callback($request);
+            }
 
             return true;
         });

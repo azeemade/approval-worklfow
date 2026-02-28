@@ -15,10 +15,10 @@ return new class extends Migration {
 
             if ($useUuid) {
                 $table->uuid('id')->primary();
-                $table->foreignUuid('approval_flow_id')->constrained($flowsTable)->cascadeOnDelete();
+                $table->foreignUuid('approval_flow_id')->nullable()->constrained($flowsTable)->nullOnDelete();
             } else {
                 $table->id();
-                $table->foreignId('approval_flow_id')->constrained($flowsTable)->cascadeOnDelete();
+                $table->foreignId('approval_flow_id')->nullable()->constrained($flowsTable)->nullOnDelete();
             }
 
             if ($useUuid) {

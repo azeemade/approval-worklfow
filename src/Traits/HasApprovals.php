@@ -55,37 +55,37 @@ trait HasApprovals
     /**
      * Approve the current pending request.
      */
-    public function approveRequest($approver, ?string $comment = null): bool
+    public function approveRequest($approver, ?string $comment = null, ?callable $callback = null): bool
     {
         $request = $this->approvalRequest()
             ->whereIn('status', [\Azeem\ApprovalWorkflow\Enums\ApprovalStatus::PENDING, \Azeem\ApprovalWorkflow\Enums\ApprovalStatus::RETURNED])
             ->firstOrFail();
 
-        return app(\Azeem\ApprovalWorkflow\Services\ApprovalService::class)->approve($request, $approver, $comment);
+        return app(\Azeem\ApprovalWorkflow\Services\ApprovalService::class)->approve($request, $approver, $comment, $callback);
     }
 
     /**
      * Reject the current pending request.
      */
-    public function rejectRequest($approver, ?string $comment = null): bool
+    public function rejectRequest($approver, ?string $comment = null, ?callable $callback = null): bool
     {
         $request = $this->approvalRequest()
             ->whereIn('status', [\Azeem\ApprovalWorkflow\Enums\ApprovalStatus::PENDING, \Azeem\ApprovalWorkflow\Enums\ApprovalStatus::RETURNED])
             ->firstOrFail();
 
-        return app(\Azeem\ApprovalWorkflow\Services\ApprovalService::class)->reject($request, $approver, $comment);
+        return app(\Azeem\ApprovalWorkflow\Services\ApprovalService::class)->reject($request, $approver, $comment, $callback);
     }
 
     /**
      * Request changes for the current pending request.
      */
-    public function requestApprovalChanges($approver, ?string $comment = null, array $fields = []): bool
+    public function requestApprovalChanges($approver, ?string $comment = null, array $fields = [], ?callable $callback = null): bool
     {
         $request = $this->approvalRequest()
             ->whereIn('status', [\Azeem\ApprovalWorkflow\Enums\ApprovalStatus::PENDING, \Azeem\ApprovalWorkflow\Enums\ApprovalStatus::RETURNED])
             ->firstOrFail();
 
-        return app(\Azeem\ApprovalWorkflow\Services\ApprovalService::class)->requestChanges($request, $approver, $comment, $fields);
+        return app(\Azeem\ApprovalWorkflow\Services\ApprovalService::class)->requestChanges($request, $approver, $comment, $fields, $callback);
     }
 
     /**
