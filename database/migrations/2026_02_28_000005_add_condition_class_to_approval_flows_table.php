@@ -11,6 +11,7 @@ return new class extends Migration {
 
         Schema::table($table, function (Blueprint $table) {
             $table->string('condition_class')->nullable()->after('trigger_type');
+            $table->string('description')->nullable()->after('name');
         });
     }
 
@@ -21,6 +22,11 @@ return new class extends Migration {
         if (Schema::hasColumn($tableName, 'condition_class')) {
             Schema::table($tableName, function (Blueprint $table) {
                 $table->dropColumn('condition_class');
+            });
+        }
+        if (Schema::hasColumn($tableName, 'description')) {
+            Schema::table($tableName, function (Blueprint $table) {
+                $table->dropColumn('description');
             });
         }
     }
