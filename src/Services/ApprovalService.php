@@ -239,20 +239,34 @@ class ApprovalService
         });
     }
 
-    /**
-     * Reroute the request to a new approver.
-     *
-     * @param ApprovalRequest $request
-     * @param mixed $newApproverId
-     * @param mixed $adminUser
-     * @return bool
-     */
-    public function reroute(ApprovalRequest $request, $newApproverId, $adminUser): bool
+    public function reroute(ApprovalRequest $request, $oldApproverId, $newApproverId, $adminUser): bool
     {
-        return DB::transaction(function () use ($request, $newApproverId, $adminUser) {
-            $oldApproverId = $request->current_approver_id;
+        return DB::transaction(function () use ($request, $oldApproverId, $newApproverId, $adminUser) {
+            $pendingApprovers = $request->pending_approvers ?? [];
 
-            $request->update(['current_approver_id' => $newApproverId]);
+            // If old approver isn't in the pending list but is the legacy current_approver_id...
+            if (!in_array($oldApproverId, $pendingApprovers) && $request->current_approver_id == $oldApproverId) {
+                $pendingApprovers[] = $oldApproverId;
+            }
+
+            if (!in_array($oldApproverId, $pendingApprovers)) {
+                throw new Exception("User {$oldApproverId} is not a pending approver for this request.");
+            }
+
+            // Remove old, add new
+            $pendingApprovers = array_values(array_diff($pendingApprovers, [$oldApproverId]));
+            if (!in_array($newApproverId, $pendingApprovers)) {
+                $pendingApprovers[] = $newApproverId;
+            }
+
+            $updateData = ['pending_approvers' => $pendingApprovers];
+
+            // Maintain backwards compatibility for single-approver logic
+            if ($request->current_approver_id == $oldApproverId) {
+                $updateData['current_approver_id'] = $newApproverId;
+            }
+
+            $request->update($updateData);
 
             // Log the reroute
             $this->logAction(
@@ -263,6 +277,7 @@ class ApprovalService
             );
 
             // Notify the new approver
+            // Note: ApprovalRequested specifically notifies $request->pending_approvers
             \Azeem\ApprovalWorkflow\Events\ApprovalRequested::dispatch($request->refresh());
 
             return true;

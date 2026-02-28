@@ -87,4 +87,28 @@ trait HasApprovals
 
         return app(\Azeem\ApprovalWorkflow\Services\ApprovalService::class)->requestChanges($request, $approver, $comment, $fields);
     }
+
+    /**
+     * Reroute the current pending request from one approver to another.
+     */
+    public function rerouteApproval($oldApproverId, $newApproverId, $adminUser): bool
+    {
+        $request = $this->approvalRequest()
+            ->whereIn('status', [\Azeem\ApprovalWorkflow\Enums\ApprovalStatus::PENDING, \Azeem\ApprovalWorkflow\Enums\ApprovalStatus::RETURNED])
+            ->firstOrFail();
+
+        return app(\Azeem\ApprovalWorkflow\Services\ApprovalService::class)->reroute($request, $oldApproverId, $newApproverId, $adminUser);
+    }
+
+    /**
+     * Remove a specific approver from the current pending request.
+     */
+    public function removeApprover($approverIdToRemove, $adminUser): bool
+    {
+        $request = $this->approvalRequest()
+            ->whereIn('status', [\Azeem\ApprovalWorkflow\Enums\ApprovalStatus::PENDING, \Azeem\ApprovalWorkflow\Enums\ApprovalStatus::RETURNED])
+            ->firstOrFail();
+
+        return app(\Azeem\ApprovalWorkflow\Services\ApprovalService::class)->removeApprover($request, $approverIdToRemove, $adminUser);
+    }
 }
