@@ -157,6 +157,36 @@ $service->reroute($request, $newApproverId, $adminUser);
 
 This updates `current_approver_id`, logs the action, and sends a new notification to the replacement approver.
 
+### 6. Conditional Workflows
+
+You can configure an approval flow to run only if certain conditions are met (e.g., amount > $5000, or specifically tailored business rules). If the condition fails, the request is instantly created as `status = skipped` and processing continues immediately.
+
+**Step 1:** Create a condition class implementing `ApprovalCondition`:
+```php
+use Azeem\ApprovalWorkflow\Contracts\ApprovalCondition;
+use Illuminate\Database\Eloquent\Model;
+
+class HighAmountCondition implements ApprovalCondition
+{
+    public function requiresApproval(Model $model, array $attributes): bool
+    {
+        return $attributes['amount'] > 5000;
+    }
+}
+```
+
+**Step 2:** Attach it to your workflow flow when creating it:
+```php
+$flow = ApprovalFlow::create([
+    'name' => 'High Value Expense Approval',
+    'action_type' => 'expense_report',
+    'condition_class' => HighAmountCondition::class,
+    'is_active' => true,
+]);
+```
+
+When you call `$service->submit(...)`, your condition is automatically evaluated!
+
 ---
 
 ## Notifications

@@ -89,6 +89,52 @@ class ApprovalServiceTest extends TestCase
         $this->assertEquals(2, $request->fresh()->current_level); // stays at max or we could check status
         $this->assertEquals('approved', $request->fresh()->status);
     }
+
+    /** @test */
+    public function it_creates_a_pending_request_if_condition_is_met()
+    {
+        $flow = ApprovalFlow::create([
+            'name' => 'Conditional Flow True',
+            'action_type' => 'conditional_true',
+            'condition_class' => TrueCondition::class,
+            'is_active' => true
+        ]);
+        $flow->steps()->create(['level' => 1, 'approver_id' => 99]);
+
+        $model = TestModel::create(['name' => 'Should approve']);
+        $service = new ApprovalService();
+        $request = $service->submit($model, ['action_type' => 'conditional_true', 'creator_id' => 1]);
+
+        $this->assertEquals('pending', $request->status);
+        $this->assertEquals(99, $request->current_approver_id);
+    }
+
+    /** @test */
+    public function it_skips_approval_if_condition_is_not_met()
+    {
+        \Illuminate\Support\Facades\Event::fake([\Azeem\ApprovalWorkflow\Events\ApprovalSkipped::class]);
+
+        $flow = ApprovalFlow::create([
+            'name' => 'Conditional Flow False',
+            'action_type' => 'conditional_false',
+            'condition_class' => FalseCondition::class,
+            'is_active' => true
+        ]);
+        $flow->steps()->create(['level' => 1, 'approver_id' => 99]);
+
+        $model = TestModel::create(['name' => 'Should skip']);
+        $service = new ApprovalService();
+        $request = $service->submit($model, ['action_type' => 'conditional_false', 'creator_id' => 1]);
+
+        $this->assertEquals('skipped', $request->status);
+        $this->assertNull($request->current_approver_id);
+
+        \Illuminate\Support\Facades\Event::assertDispatched(\Azeem\ApprovalWorkflow\Events\ApprovalSkipped::class);
+        $this->assertDatabaseHas('approval_request_logs', [
+            'approval_request_id' => $request->id,
+            'action' => 'skipped',
+        ]);
+    }
 }
 
 class TestModel extends Model
@@ -102,4 +148,20 @@ class ServiceTestUser extends AuthUser
 {
     protected $table = 'users';
     protected $guarded = [];
+}
+
+class TrueCondition implements \Azeem\ApprovalWorkflow\Contracts\ApprovalCondition
+{
+    public function requiresApproval(\Illuminate\Database\Eloquent\Model $model, array $attributes): bool
+    {
+        return true;
+    }
+}
+
+class FalseCondition implements \Azeem\ApprovalWorkflow\Contracts\ApprovalCondition
+{
+    public function requiresApproval(\Illuminate\Database\Eloquent\Model $model, array $attributes): bool
+    {
+        return false;
+    }
 }

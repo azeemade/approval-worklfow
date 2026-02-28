@@ -42,6 +42,36 @@ class ApprovalService
             throw new Exception("No active approval flow found for action: {$actionType}");
         }
 
+        // Evaluate conditional trigger if defined
+        if ($flow->condition_class) {
+            $condition = app($flow->condition_class);
+            if (!$condition instanceof \Azeem\ApprovalWorkflow\Contracts\ApprovalCondition) {
+                throw new Exception("Condition class {$flow->condition_class} must implement \Azeem\ApprovalWorkflow\Contracts\ApprovalCondition");
+            }
+
+            if (!$condition->requiresApproval($model, $attributes)) {
+                // Approval is not required, log it as skipped and fire the event
+                return DB::transaction(function () use ($model, $flow, $attributes) {
+                    $request = ApprovalRequest::create([
+                        'approval_flow_id' => $flow->id,
+                        'model_type' => get_class($model),
+                        'model_id' => $model->getKey(),
+                        'current_level' => 1,
+                        'status' => 'skipped',
+                        'creator_id' => $attributes['creator_id'] ?? auth()->id(),
+                        'metadata' => $attributes['metadata'] ?? null,
+                        'current_approver_id' => null,
+                    ]);
+
+                    $this->logAction($request, $request->creator_id, 'skipped', 'Approval skipped by condition: ' . class_basename($flow->condition_class));
+
+                    \Azeem\ApprovalWorkflow\Events\ApprovalSkipped::dispatch($request);
+
+                    return $request;
+                });
+            }
+        }
+
         // 2. Create the request
         return DB::transaction(function () use ($model, $flow, $attributes) {
             $firstStep = $flow->steps->where('level', 1)->first();
