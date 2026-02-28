@@ -51,7 +51,7 @@ class RequestRejectedNotification extends Notification implements ShouldQueue
             ->subject('Request Rejected')
             ->line('Your request has been rejected.')
             ->line('Type: ' . $this->request->model_type)
-            ->line('Status: ' . $this->request->status)
+            ->line('Status: ' . $this->request->status->value)
             ->action('View Request', $actionUrl);
 
         if ($theme && $theme !== 'default') {

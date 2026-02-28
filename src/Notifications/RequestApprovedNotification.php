@@ -51,7 +51,7 @@ class RequestApprovedNotification extends Notification implements ShouldQueue
             ->subject('Request Approved')
             ->line('Your request has been approved.')
             ->line('Type: ' . $this->request->model_type)
-            ->line('Status: ' . $this->request->status)
+            ->line('Status: ' . $this->request->status->value)
             ->action('View Request', $actionUrl);
 
         if ($theme && $theme !== 'default') {
