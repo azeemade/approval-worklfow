@@ -77,6 +77,12 @@ class ApprovalService
         return DB::transaction(function () use ($model, $flow, $attributes) {
             $firstStep = $flow->steps->where('level', 1)->first();
             $approverId = $firstStep ? $firstStep->approver_id : null;
+            $approversArray = $firstStep ? ($firstStep->approvers ?? []) : [];
+
+            // If the old approver_id is set but approvers array is empty, migrate it on the fly
+            if (empty($approversArray) && $approverId) {
+                $approversArray = [$approverId];
+            }
 
             $request = ApprovalRequest::create([
                 'approval_flow_id' => $flow->id,
@@ -86,7 +92,9 @@ class ApprovalService
                 'status' => ApprovalStatus::PENDING,
                 'creator_id' => $attributes['creator_id'] ?? auth()->id(),
                 'metadata' => $attributes['metadata'] ?? null,
-                'current_approver_id' => $approverId,
+                'current_approver_id' => $approverId, // Kept for backwards compatibility
+                'pending_approvers' => $approversArray,
+                'approved_by' => [],
             ]);
 
             // Log initialization
@@ -109,9 +117,41 @@ class ApprovalService
             $currentLevel = $request->current_level;
             $flow = $request->flow;
             $totalLevels = $flow->steps()->count();
+            $currentStep = $flow->steps()->where('level', $currentLevel)->first();
 
             // Log the approval
             $this->logAction($request, $approver->id, 'approved', $comment);
+
+            // Update pending vs approved arrays
+            $pendingApprovers = $request->pending_approvers ?? [];
+            $approvedBy = $request->approved_by ?? [];
+
+            // Remove approver from pending and add to approved_by
+            $pendingApprovers = array_values(array_diff($pendingApprovers, [$approver->id]));
+            if (!in_array($approver->id, $approvedBy)) {
+                $approvedBy[] = $approver->id;
+            }
+
+            $request->update([
+                'pending_approvers' => $pendingApprovers,
+                'approved_by' => $approvedBy
+            ]);
+
+            $strategy = $currentStep ? ($currentStep->strategy ?? 'any') : 'any';
+
+            // Check if we should advance to the next level
+            $shouldAdvance = false;
+
+            if ($strategy === 'any') {
+                $shouldAdvance = true;
+            } elseif ($strategy === 'all') {
+                $shouldAdvance = empty($pendingApprovers);
+            }
+
+            if (!$shouldAdvance) {
+                // We don't advance yet, still waiting on others.
+                return true;
+            }
 
             $removedApprovers = $request->removed_approvers ?? [];
 
@@ -119,15 +159,28 @@ class ApprovalService
                 // Move to next level, skipping any removed approvers
                 $nextLevel = $currentLevel;
                 $nextApproverId = null;
+                $nextPendingApprovers = [];
                 $foundNext = false;
 
                 while ($nextLevel < $totalLevels) {
                     $nextLevel++;
                     $nextStep = $flow->steps()->where('level', $nextLevel)->first();
                     $potentialApproverId = $nextStep ? $nextStep->approver_id : null;
+                    $potentialApproversArray = $nextStep ? ($nextStep->approvers ?? []) : [];
 
-                    if (!in_array($potentialApproverId, $removedApprovers)) {
+                    // Backwards compat check
+                    if (empty($potentialApproversArray) && $potentialApproverId) {
+                        $potentialApproversArray = [$potentialApproverId];
+                    }
+
+                    // Remove any approvers that were explicitly removed dynamically via removeApprover()
+                    $validPending = array_values(array_diff($potentialApproversArray, $removedApprovers));
+
+                    // Even if approver_id was null (e.g. role-based), we should stop searching and just set it up
+                    // if there are approvers, or if it's explicitly null implying "any in role"
+                    if (!empty($validPending) || !$potentialApproverId) {
                         $nextApproverId = $potentialApproverId;
+                        $nextPendingApprovers = $validPending;
                         $foundNext = true;
                         break;
                     }
@@ -136,7 +189,9 @@ class ApprovalService
                 if ($foundNext) {
                     $request->update([
                         'current_level' => $nextLevel,
-                        'current_approver_id' => $nextApproverId
+                        'current_approver_id' => $nextApproverId, // Backwards usage
+                        'pending_approvers' => $nextPendingApprovers,
+                        'approved_by' => []
                     ]);
                     \Azeem\ApprovalWorkflow\Events\ApprovalRequested::dispatch($request->refresh());
                 } else {
@@ -145,6 +200,7 @@ class ApprovalService
                         'status' => ApprovalStatus::APPROVED,
                         'approved_at' => now(),
                         'current_approver_id' => null,
+                        'pending_approvers' => [],
                     ]);
                     \Azeem\ApprovalWorkflow\Events\RequestApproved::dispatch($request);
                 }
@@ -154,6 +210,7 @@ class ApprovalService
                     'status' => ApprovalStatus::APPROVED,
                     'approved_at' => now(),
                     'current_approver_id' => null,
+                    'pending_approvers' => [],
                 ]);
                 \Azeem\ApprovalWorkflow\Events\RequestApproved::dispatch($request);
             }
@@ -248,25 +305,46 @@ class ApprovalService
     {
         return DB::transaction(function () use ($request, $approverIdToRemove, $adminUser) {
             $removedApprovers = $request->removed_approvers ?? [];
+            $pendingApprovers = $request->pending_approvers ?? [];
 
             if (!in_array($approverIdToRemove, $removedApprovers)) {
                 $removedApprovers[] = $approverIdToRemove;
-
-                $request->update([
-                    'removed_approvers' => $removedApprovers
-                ]);
             }
+
+            // Remove from pending immediately
+            $pendingApprovers = array_values(array_diff($pendingApprovers, [$approverIdToRemove]));
+
+            $request->update([
+                'removed_approvers' => $removedApprovers,
+                'pending_approvers' => $pendingApprovers
+            ]);
 
             $this->logAction($request, $adminUser->id, 'approver_removed', "Removed approver {$approverIdToRemove} from the request");
 
             \Azeem\ApprovalWorkflow\Events\ApproverRemoved::dispatch($request, $approverIdToRemove);
 
-            // If the person we removed is the CURRENT approver, we need to advance the request
+            $currentLevel = $request->current_level;
+            $flow = $request->flow;
+            $currentStep = $flow->steps()->where('level', $currentLevel)->first();
+            $strategy = $currentStep ? ($currentStep->strategy ?? 'any') : 'any';
+
+            $shouldAutoAdvance = false;
+
+            // If the person we removed is the CURRENT legacy approver (backward compat check)...
             if ($request->current_approver_id == $approverIdToRemove) {
+                $shouldAutoAdvance = true;
+            }
+
+            // Or if strategy is ALL, and removing this person empties the pending queue...
+            if ($strategy === 'all' && empty($pendingApprovers)) {
+                $shouldAutoAdvance = true;
+            }
+
+            if ($shouldAutoAdvance) {
                 // Act as if it was approved to move to the next valid person (or finish)
                 // Passing the admin logic to an internal advance method is better, 
                 // but for now we can just call approve() programmatically with the admin as the actor
-                $this->approve($request, $adminUser, "System Auto-Advance: Current Approver Removed");
+                $this->approve($request, $adminUser, "System Auto-Advance: Approver Removed");
             }
 
             return true;

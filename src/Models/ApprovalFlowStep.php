@@ -8,6 +8,10 @@ class ApprovalFlowStep extends Model
 {
     protected $guarded = [];
 
+    protected $casts = [
+        'approvers' => 'array',
+    ];
+
     public function __construct(array $attributes = [])
     {
         parent::__construct($attributes);

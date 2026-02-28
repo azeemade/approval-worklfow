@@ -198,6 +198,83 @@ class ApprovalServiceTest extends TestCase
             'action' => 'approver_removed'
         ]);
     }
+
+    /** @test */
+    public function it_advances_immediately_if_strategy_is_any()
+    {
+        $flow = ApprovalFlow::create([
+            'name' => 'Any Strategy Flow',
+            'action_type' => 'any_strategy',
+            'is_active' => true
+        ]);
+
+        $flow->steps()->create([
+            'level' => 1,
+            'approvers' => [10, 11, 12],
+            'strategy' => 'any'
+        ]);
+        $flow->steps()->create(['level' => 2, 'approver_id' => 20]);
+
+        $approver = ServiceTestUser::forceCreate(['id' => 11, 'name' => 'Approver B', 'email' => 'b@example.com', 'password' => 'secret']);
+        $model = TestModel::create(['name' => 'Any Test']);
+
+        $service = new ApprovalService();
+        $request = $service->submit($model, ['action_type' => 'any_strategy']);
+
+        $this->assertEquals([10, 11, 12], $request->pending_approvers);
+
+        // One person approves
+        $service->approve($request, $approver);
+
+        // It should advance
+        $request->refresh();
+        $this->assertEquals(2, $request->current_level);
+        $this->assertEquals(20, $request->current_approver_id);
+    }
+
+    /** @test */
+    public function it_waits_for_everyone_if_strategy_is_all()
+    {
+        $flow = ApprovalFlow::create([
+            'name' => 'All Strategy Flow',
+            'action_type' => 'all_strategy',
+            'is_active' => true
+        ]);
+
+        $flow->steps()->create([
+            'level' => 1,
+            'approvers' => [10, 11],
+            'strategy' => 'all'
+        ]);
+        $flow->steps()->create(['level' => 2, 'approver_id' => 20]);
+
+        $approverA = ServiceTestUser::forceCreate(['id' => 10, 'name' => 'Approver A', 'email' => 'a@example.com', 'password' => 'secret']);
+        $approverB = ServiceTestUser::forceCreate(['id' => 11, 'name' => 'Approver B', 'email' => 'b2@example.com', 'password' => 'secret']);
+
+        $model = TestModel::create(['name' => 'All Test']);
+
+        $service = new ApprovalService();
+        $request = $service->submit($model, ['action_type' => 'all_strategy']);
+
+        $this->assertEquals([10, 11], $request->pending_approvers);
+
+        // Person A approves
+        $service->approve($request, $approverA);
+
+        // It should NOT advance yet
+        $request->refresh();
+        $this->assertEquals(1, $request->current_level);
+        $this->assertEquals([11], $request->pending_approvers);
+        $this->assertEquals([10], $request->approved_by);
+
+        // Person B approves
+        $service->approve($request, $approverB);
+
+        // NOW it should advance
+        $request->refresh();
+        $this->assertEquals(2, $request->current_level);
+        $this->assertEquals(20, $request->current_approver_id);
+    }
 }
 
 class TestModel extends Model

@@ -15,6 +15,8 @@ class ApprovalRequest extends Model
         'metadata' => 'array',
         'requested_changes' => 'array',
         'removed_approvers' => 'array',
+        'pending_approvers' => 'array',
+        'approved_by' => 'array',
         'status' => \Azeem\ApprovalWorkflow\Enums\ApprovalStatus::class,
         'approved_at' => 'datetime',
         'rejected_at' => 'datetime',

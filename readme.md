@@ -207,6 +207,28 @@ $flow = ApprovalFlow::create([
 
 When you call `$service->submit(...)`, your condition is automatically evaluated!
 
+### 9. Multi-Approver Levels (Maker & Checker)
+
+You can assign multiple users to a single level (like a group of "Makers" or "Checkers") and configure whether **any** one person can approve, or if **all** of them must approve.
+
+```php
+// Any Strategy (The first person to approve advances the request)
+$flow->steps()->create([
+    'level' => 1, 
+    'approvers' => [10, 11, 12], 
+    'strategy' => 'any' 
+]);
+
+// All Strategy (Everyone in the array must approve before it advances)
+$flow->steps()->create([
+    'level' => 2, 
+    'approvers' => [20, 21], 
+    'strategy' => 'all'
+]);
+```
+
+The system automatically tracks who has approved via the `pending_approvers` and `approved_by` JSON arrays on the `ApprovalRequest` model, and sends bulk notifications correctly to everyone pending.
+
 ---
 
 ## Notifications
@@ -282,14 +304,13 @@ Event::listen(RequestApproved::class, function ($event) {
 
 These features are planned or recommended for future versions:
 
-1. **Multiple Approvers per Step**: Support `any` (first to approve) or `all` (everyone must approve) strategies per step.
-2. **Role-based Approvers**: Assign steps to roles (e.g. via Spatie Permissions) instead of specific user IDs.
-3. **Conditional Step Skipping**: Skip steps based on request attributes (e.g. skip finance step if amount < $50).
-4. **Due Dates & Reminders**: Track `due_at` and send reminder notifications via a scheduled job.
-5. **Callback on Final Approval**: Register a closure/invokable class in config to run after final approval (e.g. update the model).
-6. **Drag-and-Drop Flow Builder UI**: A first-party Filament or Nova resource for managing flows visually.
-7. **Model-driven Flow Trigger**: Automatically submit a model on save via a trait, configured via `trigger_type = 'model_save'`.
-8. **Audit Trail UI Component**: A Blade/Livewire component to render the approval log timeline.
+1. **Role-based Approvers**: Assign steps to roles (e.g. via Spatie Permissions) instead of specific user IDs.
+2. **Conditional Step Skipping**: Skip steps based on request attributes (e.g. skip finance step if amount < $50).
+3. **Due Dates & Reminders**: Track `due_at` and send reminder notifications via a scheduled job.
+4. **Callback on Final Approval**: Register a closure/invokable class in config to run after final approval (e.g. update the model).
+5. **Drag-and-Drop Flow Builder UI**: A first-party Filament or Nova resource for managing flows visually.
+6. **Model-driven Flow Trigger**: Automatically submit a model on save via a trait, configured via `trigger_type = 'model_save'`.
+7. **Audit Trail UI Component**: A Blade/Livewire component to render the approval log timeline.
 
 ---
 

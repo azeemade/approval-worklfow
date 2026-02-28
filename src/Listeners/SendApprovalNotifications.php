@@ -42,18 +42,29 @@ class SendApprovalNotifications implements ShouldQueue
     {
         $request = $event->request;
 
-        // Use the current_approver relationship if set
-        $approver = $request->currentApprover;
+        $pendingApproverIds = $request->pending_approvers ?? [];
 
-        if (!$approver) {
+        // Backwards compatibility check
+        if (empty($pendingApproverIds) && $request->current_approver_id) {
+            $pendingApproverIds = [$request->current_approver_id];
+        }
+
+        if (empty($pendingApproverIds)) {
             // Fallback to flow step logic (mainly for backward compat or if not set)
             $flow = $request->flow;
             $step = $flow->steps->where('level', $request->current_level)->first();
-            $approver = $step ? $step->approver : null;
+            if ($step && $step->approver_id) {
+                $pendingApproverIds = [$step->approver_id];
+            }
         }
 
-        if ($approver) {
-            $this->sendNotification($approver, new ApprovalRequestedNotification($request));
+        if (!empty($pendingApproverIds)) {
+            $userModelClass = config('approval-workflow.user_model');
+            $users = (new $userModelClass)->whereIn('id', $pendingApproverIds)->get();
+
+            if ($users->isNotEmpty()) {
+                $this->sendNotification($users, new ApprovalRequestedNotification($request));
+            }
         }
     }
 
