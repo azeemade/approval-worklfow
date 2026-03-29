@@ -33,13 +33,12 @@ class ApprovalService
         }
 
         $flow = ApprovalFlow::where('action_type', $actionType)
-            ->where('is_active', true)
             ->when($teamId, function ($q) use ($teamId) {
                 return $q->where('team_id', $teamId);
             })
             ->first();
 
-        if (!$flow || $flow->steps()->count() === 0) {
+        if (!$flow->is_active || $flow->steps()->count() === 0) {
             // Auto-approve if no active flow is found or flow has zero steps
             return DB::transaction(function () use ($model, $flow, $attributes, $actionType) {
                 $request = ApprovalRequest::create([
