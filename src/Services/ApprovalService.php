@@ -20,7 +20,7 @@ class ApprovalService
      * @return ApprovalRequest
      * @throws Exception
      */
-    public function submit(Model $model, array $attributes = []): ApprovalRequest
+    public function submit(Model $model, array $attributes = []): ApprovalRequest|null
     {
         // 1. Find the appropriate flow
         // The attributes should contain enough info to find the flow (e.g. action_type)
@@ -37,6 +37,10 @@ class ApprovalService
                 return $q->where('team_id', $teamId);
             })
             ->first();
+
+        if (!$flow) {
+            return null;
+        }
 
         if (!$flow->is_active || $flow->steps()->count() === 0) {
             // Auto-approve if no active flow is found or flow has zero steps
