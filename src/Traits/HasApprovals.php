@@ -47,7 +47,7 @@ trait HasApprovals
     /**
      * Submit this model for an approval workflow.
      */
-    public function submitForApproval(array $attributes = []): ApprovalRequest
+    public function submitForApproval(array $attributes = []): ApprovalRequest|null
     {
         return app(\Azeem\ApprovalWorkflow\Services\ApprovalService::class)->submit($this, $attributes);
     }
