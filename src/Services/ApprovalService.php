@@ -42,25 +42,82 @@ class ApprovalService
             return null;
         }
 
-        if (!$flow->is_active || $flow->steps()->count() === 0) {
-            // Auto-approve if no active flow is found or flow has zero steps
-            return DB::transaction(function () use ($model, $flow, $attributes, $actionType) {
+        if (!$flow->is_active) {
+            return DB::transaction(function () use ($model, $flow, $attributes) {
+                $steps = $flow->steps()->orderBy('level')->get();
+
+                // Collect all approver IDs across all steps for the audit trail
+                $allApprovers = [];
+                foreach ($steps as $step) {
+                    $approvers = $step->approvers ?? [];
+                    if (empty($approvers) && $step->approver_id) {
+                        $approvers = [$step->approver_id];
+                    }
+                    foreach ($approvers as $approverId) {
+                        $allApprovers[] = $approverId;
+                    }
+                }
+
                 $request = ApprovalRequest::create([
-                    'approval_flow_id' => $flow ? $flow->id : null,
-                    'model_type' => get_class($model),
-                    'model_id' => $model->getKey(),
-                    'current_level' => 1,
-                    'status' => ApprovalStatus::APPROVED, // instantly approved
-                    'creator_id' => $attributes['creator_id'] ?? auth()->id(),
-                    'metadata' => $attributes['metadata'] ?? null,
+                    'approval_flow_id'   => $flow->id,
+                    'model_type'         => get_class($model),
+                    'model_id'           => $model->getKey(),
+                    'current_level'      => 1,
+                    'status'             => ApprovalStatus::APPROVED,
+                    'creator_id'         => $attributes['creator_id'] ?? auth()->id(),
+                    'metadata'           => $attributes['metadata'] ?? null,
                     'current_approver_id' => null,
-                    'pending_approvers' => [],
-                    'approved_by' => [],
-                    'approved_at' => now(),
+                    'pending_approvers'  => [],
+                    'approved_by'        => array_values(array_unique($allApprovers)),
+                    'approved_at'        => now(),
                 ]);
 
-                $reason = !$flow ? "No active workflow found for action: {$actionType}" : "Workflow has no steps configured";
-                $this->logAction($request, $request->creator_id, 'approved', "Auto-approved: {$reason}");
+                if ($steps->isEmpty()) {
+                    // No steps configured — single system log entry
+                    $this->logAction($request, $request->creator_id, 'approved', 'Auto-approved: Workflow has no steps configured');
+                } else {
+                    // Log an auto-approved entry for every approver in every step
+                    foreach ($steps as $step) {
+                        $approvers = $step->approvers ?? [];
+                        if (empty($approvers) && $step->approver_id) {
+                            $approvers = [$step->approver_id];
+                        }
+
+                        if (empty($approvers)) {
+                            // Step has no explicit approver — log against the creator
+                            $this->logAction($request, $request->creator_id, 'approved', "Auto-approved: Workflow inactive (level {$step->level}, no approver assigned)");
+                        } else {
+                            foreach ($approvers as $approverId) {
+                                $this->logAction($request, $approverId, 'approved', "Auto-approved: Workflow inactive (level {$step->level})");
+                            }
+                        }
+                    }
+                }
+
+                \Azeem\ApprovalWorkflow\Events\RequestApproved::dispatch($request);
+
+                return $request;
+            });
+        }
+
+        if ($flow->steps()->count() === 0) {
+            // Active flow but no steps — auto-approve with a single log entry
+            return DB::transaction(function () use ($model, $flow, $attributes) {
+                $request = ApprovalRequest::create([
+                    'approval_flow_id'   => $flow->id,
+                    'model_type'         => get_class($model),
+                    'model_id'           => $model->getKey(),
+                    'current_level'      => 1,
+                    'status'             => ApprovalStatus::APPROVED,
+                    'creator_id'         => $attributes['creator_id'] ?? auth()->id(),
+                    'metadata'           => $attributes['metadata'] ?? null,
+                    'current_approver_id' => null,
+                    'pending_approvers'  => [],
+                    'approved_by'        => [],
+                    'approved_at'        => now(),
+                ]);
+
+                $this->logAction($request, $request->creator_id, 'approved', 'Auto-approved: Workflow has no steps configured');
 
                 \Azeem\ApprovalWorkflow\Events\RequestApproved::dispatch($request);
 
