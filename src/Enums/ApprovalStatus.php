@@ -9,4 +9,5 @@ enum ApprovalStatus: string
     case REJECTED = 'rejected';
     case SKIPPED = 'skipped';
     case RETURNED = 'returned';
+    case CANCELLED = 'cancelled';
 }

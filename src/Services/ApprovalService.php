@@ -310,22 +310,63 @@ class ApprovalService
 
     /**
      * Reject the request.
+     *
+     * Increments the rejected_count on the request. If the count meets or exceeds the
+     * flow's rejection_threshold, all remaining pending approvers are logged as 'cancelled',
+     * the request status is set to REJECTED, and the RequestRejected event is dispatched.
+     * If the threshold has not yet been reached the request stays PENDING, the rejector is
+     * removed from pending_approvers, and the RejectionRecorded event is dispatched instead.
      */
     public function reject(ApprovalRequest $request, $approver, ?string $comment = null, ?callable $callback = null): bool
     {
         return DB::transaction(function () use ($request, $approver, $comment, $callback) {
-            $request->update([
-                'status' => ApprovalStatus::REJECTED,
-                'rejected_at' => now(),
-                'current_approver_id' => null,
-            ]);
+            $flow = $request->flow;
+            $rejectionThreshold = $flow ? ($flow->rejection_threshold ?? 1) : 1;
 
+            // Track rejections and remove the rejector from pending
+            $newRejectedCount = ($request->rejected_count ?? 0) + 1;
+            $pendingApprovers = array_values(array_diff($request->pending_approvers ?? [], [$approver->id]));
+
+            // Log the rejection action for the acting approver
             $this->logAction($request, $approver->id, 'rejected', $comment);
 
-            \Azeem\ApprovalWorkflow\Events\RequestRejected::dispatch($request);
+            if ($newRejectedCount >= $rejectionThreshold) {
+                // Threshold met — log cancellation for every remaining pending approver
+                foreach ($pendingApprovers as $pendingApproverId) {
+                    $this->logAction(
+                        $request,
+                        $pendingApproverId,
+                        'cancelled',
+                        'Request stopped: rejection threshold reached'
+                    );
+                }
 
-            if ($callback) {
-                $callback($request);
+                $request->update([
+                    'rejected_count'      => $newRejectedCount,
+                    'status'              => ApprovalStatus::REJECTED,
+                    'rejected_at'         => now(),
+                    'current_approver_id' => null,
+                    'pending_approvers'   => [],
+                ]);
+
+                \Azeem\ApprovalWorkflow\Events\RequestRejected::dispatch($request);
+
+                if ($callback) {
+                    $callback($request);
+                }
+            } else {
+                // Threshold not yet reached — stay pending, record partial rejection
+                $request->update([
+                    'rejected_count'    => $newRejectedCount,
+                    'pending_approvers' => $pendingApprovers,
+                ]);
+
+                \Azeem\ApprovalWorkflow\Events\RejectionRecorded::dispatch(
+                    $request,
+                    $approver->id,
+                    $newRejectedCount,
+                    $rejectionThreshold
+                );
             }
 
             return true;

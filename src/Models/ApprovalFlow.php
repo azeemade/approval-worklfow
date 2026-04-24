@@ -14,6 +14,7 @@ class ApprovalFlow extends Model
     protected $casts = [
         'metadata' => 'array',
         'is_active' => 'boolean',
+        'rejection_threshold' => 'integer',
     ];
 
     public function __construct(array $attributes = [])

@@ -372,7 +372,182 @@ class ApprovalServiceTest extends TestCase
 
         $this->assertTrue($callbackFired, 'Callback should be executed after approval.');
     }
+
+    // -----------------------------------------------------------------------
+    // rejection_threshold tests
+    // -----------------------------------------------------------------------
+
+    /** @test */
+    public function it_rejects_immediately_with_default_rejection_threshold()
+    {
+        $flow = ApprovalFlow::create([
+            'name' => 'Default Threshold Flow',
+            'action_type' => 'default_threshold',
+            'is_active' => true,
+            // rejection_threshold defaults to 1
+        ]);
+        $flow->steps()->create(['level' => 1, 'approvers' => [10], 'strategy' => 'any']);
+
+        $approver = ServiceTestUser::forceCreate(['id' => 10, 'name' => 'Approver', 'email' => 'rt1@example.com', 'password' => 'secret']);
+        $model = TestModel::create(['name' => 'Default Threshold Model']);
+        $service = new ApprovalService();
+
+        $request = $service->submit($model, ['action_type' => 'default_threshold', 'creator_id' => $approver->id]);
+        $service->reject($request, $approver, 'Not acceptable');
+
+        $this->assertEquals(\Azeem\ApprovalWorkflow\Enums\ApprovalStatus::REJECTED, $request->fresh()->status);
+        $this->assertNotNull($request->fresh()->rejected_at);
+        $this->assertEquals([], $request->fresh()->pending_approvers);
+        $this->assertEquals(1, $request->fresh()->rejected_count);
+    }
+
+    /** @test */
+    public function it_records_rejection_without_stopping_if_threshold_not_met()
+    {
+        $flow = ApprovalFlow::create([
+            'name' => 'High Threshold Flow',
+            'action_type' => 'high_threshold',
+            'is_active' => true,
+            'rejection_threshold' => 2,
+        ]);
+        $flow->steps()->create(['level' => 1, 'approvers' => [10, 11], 'strategy' => 'any']);
+
+        $approver = ServiceTestUser::forceCreate(['id' => 10, 'name' => 'Approver A', 'email' => 'rt2a@example.com', 'password' => 'secret']);
+        $model = TestModel::create(['name' => 'High Threshold Model']);
+        $service = new ApprovalService();
+
+        $request = $service->submit($model, ['action_type' => 'high_threshold', 'creator_id' => $approver->id]);
+
+        // First rejection — threshold not yet met
+        $service->reject($request, $approver, 'First rejection');
+
+        $request->refresh();
+        $this->assertEquals(\Azeem\ApprovalWorkflow\Enums\ApprovalStatus::PENDING, $request->status);
+        $this->assertEquals(1, $request->rejected_count);
+        // Rejecting approver removed from pending; approver 11 remains
+        $this->assertEquals([11], $request->pending_approvers);
+        $this->assertNull($request->rejected_at);
+    }
+
+    /** @test */
+    public function it_stops_flow_when_rejection_threshold_is_reached()
+    {
+        $flow = ApprovalFlow::create([
+            'name' => 'Two Rejection Flow',
+            'action_type' => 'two_rejections',
+            'is_active' => true,
+            'rejection_threshold' => 2,
+        ]);
+        $flow->steps()->create(['level' => 1, 'approvers' => [10, 11, 12], 'strategy' => 'any']);
+
+        $approverA = ServiceTestUser::forceCreate(['id' => 10, 'name' => 'Approver A', 'email' => 'rt3a@example.com', 'password' => 'secret']);
+        $approverB = ServiceTestUser::forceCreate(['id' => 11, 'name' => 'Approver B', 'email' => 'rt3b@example.com', 'password' => 'secret']);
+        $model = TestModel::create(['name' => 'Two Rejections Model']);
+        $service = new ApprovalService();
+
+        $request = $service->submit($model, ['action_type' => 'two_rejections', 'creator_id' => $approverA->id]);
+
+        // First rejection — still pending
+        $service->reject($request, $approverA, 'First rejection');
+        $request->refresh();
+        $this->assertEquals(\Azeem\ApprovalWorkflow\Enums\ApprovalStatus::PENDING, $request->status);
+
+        // Second rejection — threshold met
+        $service->reject($request, $approverB, 'Second rejection');
+        $request->refresh();
+
+        $this->assertEquals(\Azeem\ApprovalWorkflow\Enums\ApprovalStatus::REJECTED, $request->status);
+        $this->assertNotNull($request->rejected_at);
+        $this->assertEquals([], $request->pending_approvers);
+        $this->assertEquals(2, $request->rejected_count);
+    }
+
+    /** @test */
+    public function it_logs_cancelled_for_remaining_pending_approvers_on_rejection()
+    {
+        $flow = ApprovalFlow::create([
+            'name' => 'Cancel Audit Flow',
+            'action_type' => 'cancel_audit',
+            'is_active' => true,
+            'rejection_threshold' => 1,
+        ]);
+        // 3 approvers; approver 10 rejects, approvers 11 and 12 should get 'cancelled'
+        $flow->steps()->create(['level' => 1, 'approvers' => [10, 11, 12], 'strategy' => 'any']);
+
+        $approver = ServiceTestUser::forceCreate(['id' => 10, 'name' => 'Rejector', 'email' => 'rt4@example.com', 'password' => 'secret']);
+        $model = TestModel::create(['name' => 'Cancel Audit Model']);
+        $service = new ApprovalService();
+
+        $request = $service->submit($model, ['action_type' => 'cancel_audit', 'creator_id' => $approver->id]);
+        $service->reject($request, $approver, 'Rejected');
+
+        // Rejector logged as 'rejected'
+        $this->assertDatabaseHas('approval_request_logs', [
+            'approval_request_id' => $request->id,
+            'user_id' => 10,
+            'action' => 'rejected',
+        ]);
+
+        // Remaining approvers logged as 'cancelled'
+        $this->assertDatabaseHas('approval_request_logs', [
+            'approval_request_id' => $request->id,
+            'user_id' => 11,
+            'action' => 'cancelled',
+        ]);
+        $this->assertDatabaseHas('approval_request_logs', [
+            'approval_request_id' => $request->id,
+            'user_id' => 12,
+            'action' => 'cancelled',
+        ]);
+    }
+
+    /** @test */
+    public function it_fires_rejection_recorded_event_for_partial_rejection()
+    {
+        \Illuminate\Support\Facades\Event::fake([\Azeem\ApprovalWorkflow\Events\RejectionRecorded::class]);
+
+        $flow = ApprovalFlow::create([
+            'name' => 'Partial Rejection Flow',
+            'action_type' => 'partial_rejection',
+            'is_active' => true,
+            'rejection_threshold' => 3,
+        ]);
+        $flow->steps()->create(['level' => 1, 'approvers' => [10, 11, 12], 'strategy' => 'any']);
+
+        $approver = ServiceTestUser::forceCreate(['id' => 10, 'name' => 'Approver', 'email' => 'rt5@example.com', 'password' => 'secret']);
+        $model = TestModel::create(['name' => 'Partial Rejection Model']);
+        $service = new ApprovalService();
+
+        $request = $service->submit($model, ['action_type' => 'partial_rejection', 'creator_id' => $approver->id]);
+        $service->reject($request, $approver, 'Not yet enough');
+
+        \Illuminate\Support\Facades\Event::assertDispatched(\Azeem\ApprovalWorkflow\Events\RejectionRecorded::class);
+    }
+
+    /** @test */
+    public function it_fires_request_rejected_event_when_threshold_met()
+    {
+        \Illuminate\Support\Facades\Event::fake([\Azeem\ApprovalWorkflow\Events\RequestRejected::class]);
+
+        $flow = ApprovalFlow::create([
+            'name' => 'Final Rejection Flow',
+            'action_type' => 'final_rejection',
+            'is_active' => true,
+            'rejection_threshold' => 1,
+        ]);
+        $flow->steps()->create(['level' => 1, 'approvers' => [10], 'strategy' => 'any']);
+
+        $approver = ServiceTestUser::forceCreate(['id' => 10, 'name' => 'Approver', 'email' => 'rt6@example.com', 'password' => 'secret']);
+        $model = TestModel::create(['name' => 'Final Rejection Model']);
+        $service = new ApprovalService();
+
+        $request = $service->submit($model, ['action_type' => 'final_rejection', 'creator_id' => $approver->id]);
+        $service->reject($request, $approver, 'Done');
+
+        \Illuminate\Support\Facades\Event::assertDispatched(\Azeem\ApprovalWorkflow\Events\RequestRejected::class);
+    }
 }
+
 
 class TestModel extends Model
 {
