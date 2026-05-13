@@ -33,22 +33,29 @@ return [
     |
     | Configure the notification settings for the approval workflow.
     |
-    */
-    /*
-    |--------------------------------------------------------------------------
-    | Notifications
-    |--------------------------------------------------------------------------
+    | classes: Swap any individual notification class with your own
+    |   implementation. Your class must accept an ApprovalRequest as its
+    |   first constructor argument. Set a key to null to use the default.
     |
-    | Configure the notification settings for the approval workflow.
+    | You can also override classes at runtime using the Fluent API:
+    |   ApprovalWorkflow::useNotification('approval_requested', MyClass::class);
+    |   ApprovalWorkflow::useNotificationFor('request_approved', Invoice::class, MyClass::class);
     |
     */
     'notifications' => [
-        'enabled' => true,
-        'channels' => ['mail'],
+        'enabled'   => true,
+        'channels'  => ['mail'],
         // Options: 'default', or your own view/markdown path
-        'theme' => 'default',
+        'theme'     => 'default',
         // Whether to queue notifications
         'use_queue' => true,
+        // Override individual notification classes (null = use package default)
+        'classes'   => [
+            'approval_requested' => null,
+            'request_approved'   => null,
+            'request_rejected'   => null,
+            'changes_requested'  => null,
+        ],
     ],
 
     /*

@@ -19,6 +19,7 @@ A flexible, configurable approval workflow package for Laravel. Attach multi-lev
 - **Flexible Notification Channels**: Configure `mail`, `database`, or any other Laravel channel.
 - **Sync or Queued Notifications**: Toggle between sync (`sendNow`) and async (queued) dispatch.
 - **Notification Themes**: Point to a custom Blade view for fully branded emails.
+- **Customisable Notification Classes**: Swap any built-in notification class with your own via config or the Fluent API — globally or per-model-type.
 
 ---
 
@@ -83,6 +84,16 @@ return [
         // true = notifications are dispatched as queued jobs (recommended for production).
         // false = notifications are sent synchronously (useful for testing / simple setups).
         'use_queue' => true,
+
+        // Swap any individual notification class with your own implementation.
+        // Your class must accept an ApprovalRequest as its first constructor argument.
+        // null = use the package default.
+        'classes'   => [
+            'approval_requested' => null,
+            'request_approved'   => null,
+            'request_rejected'   => null,
+            'changes_requested'  => null,
+        ],
     ],
 ];
 ```
@@ -240,6 +251,7 @@ Notifications are dispatched automatically via events. The built-in `SendApprova
 | `ApprovalRequested` | The current approver (`current_approver_id`) |
 | `RequestApproved` | The request creator |
 | `RequestRejected` | The request creator |
+| `ChangesRequested` | The request creator |
 
 ### Custom Themes
 
@@ -279,6 +291,68 @@ Then extend the notification classes to add `toFcm()` or `toSlack()` methods, or
 // Sync (fires immediately in the same request cycle)
 'use_queue' => false,
 ```
+
+### Customising Notification Classes
+
+Every notification class ships with a `Base*` counterpart that contains the full implementation. You have three ways to customise them.
+
+#### Option A — Extend a base class (partial override)
+
+Extend the base class and override only what you need:
+
+```php
+use Azeem\ApprovalWorkflow\Notifications\BaseApprovalRequestedNotification;
+
+class MyApprovalRequestedNotification extends BaseApprovalRequestedNotification
+{
+    public function toMail($notifiable)
+    {
+        return parent::toMail($notifiable)->subject('Action Required 🔔');
+    }
+}
+```
+
+#### Option B — Swap via config (full replacement, global)
+
+Set any key under `notifications.classes` in your published config. Your class must accept an `ApprovalRequest` as its first constructor argument:
+
+```php
+// config/approval-workflow.php
+'notifications' => [
+    'classes' => [
+        'approval_requested' => App\Notifications\MyApprovalRequestedNotification::class,
+        'request_approved'   => App\Notifications\MyRequestApprovedNotification::class,
+    ],
+],
+```
+
+#### Option C — Fluent API (runtime override, global or per-model)
+
+Register overrides in your `AppServiceProvider::boot()`. This is especially useful when different model types need different notification behaviour.
+
+```php
+use Azeem\ApprovalWorkflow\ApprovalWorkflow;
+
+// Global override — applies to all models
+ApprovalWorkflow::useNotification('approval_requested', MyApprovalRequestedNotification::class);
+
+// Per-model override — only used when the request's model_type is Invoice
+ApprovalWorkflow::useNotificationFor(
+    'request_approved',
+    \App\Models\Invoice::class,
+    InvoiceApprovedNotification::class
+);
+```
+
+**Resolution priority** (highest → lowest):
+1. Per-model fluent override (`useNotificationFor`)
+2. Global fluent override (`useNotification`)
+3. Config override (`notifications.classes.*`)
+4. Package default
+
+> **Tip:** Call `ApprovalWorkflow::reset()` in your test `setUp` / `tearDown` to clear any fluent overrides between test cases.
+
+Valid notification keys: `approval_requested`, `request_approved`, `request_rejected`, `changes_requested`.
 
 ---
 
