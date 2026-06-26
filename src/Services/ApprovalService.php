@@ -33,9 +33,7 @@ class ApprovalService
         }
 
         $flow = ApprovalFlow::where('action_type', $actionType)
-            ->when($teamId, function ($q) use ($teamId) {
-                return $q->where('team_id', $teamId);
-            })
+            ->where('team_id', $teamId)
             ->first();
 
         if (!$flow) {
@@ -59,17 +57,17 @@ class ApprovalService
                 }
 
                 $request = ApprovalRequest::create([
-                    'approval_flow_id'   => $flow->id,
-                    'model_type'         => get_class($model),
-                    'model_id'           => $model->getKey(),
-                    'current_level'      => 1,
-                    'status'             => ApprovalStatus::APPROVED,
-                    'creator_id'         => $attributes['creator_id'] ?? auth()->id(),
-                    'metadata'           => $attributes['metadata'] ?? null,
+                    'approval_flow_id' => $flow->id,
+                    'model_type' => get_class($model),
+                    'model_id' => $model->getKey(),
+                    'current_level' => 1,
+                    'status' => ApprovalStatus::APPROVED,
+                    'creator_id' => $attributes['creator_id'] ?? auth()->id(),
+                    'metadata' => $attributes['metadata'] ?? null,
                     'current_approver_id' => null,
-                    'pending_approvers'  => [],
-                    'approved_by'        => array_values(array_unique($allApprovers)),
-                    'approved_at'        => now(),
+                    'pending_approvers' => [],
+                    'approved_by' => array_values(array_unique($allApprovers)),
+                    'approved_at' => now(),
                 ]);
 
                 if ($steps->isEmpty()) {
@@ -104,17 +102,17 @@ class ApprovalService
             // Active flow but no steps — auto-approve with a single log entry
             return DB::transaction(function () use ($model, $flow, $attributes) {
                 $request = ApprovalRequest::create([
-                    'approval_flow_id'   => $flow->id,
-                    'model_type'         => get_class($model),
-                    'model_id'           => $model->getKey(),
-                    'current_level'      => 1,
-                    'status'             => ApprovalStatus::APPROVED,
-                    'creator_id'         => $attributes['creator_id'] ?? auth()->id(),
-                    'metadata'           => $attributes['metadata'] ?? null,
+                    'approval_flow_id' => $flow->id,
+                    'model_type' => get_class($model),
+                    'model_id' => $model->getKey(),
+                    'current_level' => 1,
+                    'status' => ApprovalStatus::APPROVED,
+                    'creator_id' => $attributes['creator_id'] ?? auth()->id(),
+                    'metadata' => $attributes['metadata'] ?? null,
                     'current_approver_id' => null,
-                    'pending_approvers'  => [],
-                    'approved_by'        => [],
-                    'approved_at'        => now(),
+                    'pending_approvers' => [],
+                    'approved_by' => [],
+                    'approved_at' => now(),
                 ]);
 
                 $this->logAction($request, $request->creator_id, 'approved', 'Auto-approved: Workflow has no steps configured');
@@ -342,11 +340,11 @@ class ApprovalService
                 }
 
                 $request->update([
-                    'rejected_count'      => $newRejectedCount,
-                    'status'              => ApprovalStatus::REJECTED,
-                    'rejected_at'         => now(),
+                    'rejected_count' => $newRejectedCount,
+                    'status' => ApprovalStatus::REJECTED,
+                    'rejected_at' => now(),
                     'current_approver_id' => null,
-                    'pending_approvers'   => [],
+                    'pending_approvers' => [],
                 ]);
 
                 \Azeem\ApprovalWorkflow\Events\RequestRejected::dispatch($request);
@@ -357,7 +355,7 @@ class ApprovalService
             } else {
                 // Threshold not yet reached — stay pending, record partial rejection
                 $request->update([
-                    'rejected_count'    => $newRejectedCount,
+                    'rejected_count' => $newRejectedCount,
                     'pending_approvers' => $pendingApprovers,
                 ]);
 
